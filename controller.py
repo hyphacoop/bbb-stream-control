@@ -143,47 +143,50 @@ BBB_RES = '1920x1080'
 client = docker.from_env()
 
 def get_running_rooms():
-	
+
 	URL = BBB_URL
 	secret = BBB_SECRET
-	
+
 	APIURL=URL + 'api/'
-	
+
 	apimethod='getMeetings'
 	querystring=''
-	
+
 	h = hashlib.sha1((apimethod+querystring+secret).encode('utf-8'))
 	checksum = h.hexdigest()
-	
+
 	if len(querystring) > 0:
 		querystring = querystring + '&'
-	
+
 	requesturl = APIURL + apimethod + '?' + querystring + 'checksum=' + checksum
-	
+
 	response = requests.get(requesturl)
 	tree = ElementTree.fromstring(response.content)
-	
+
 	if tree.find('returncode').text != 'SUCCESS':
 		print('error getting API data')
 		sys.exit(1)
 	meetings = tree.find('meetings')
-	
+
 	mids = {}
 	if meetings:
 		for m in meetings.iter('meeting'):
 			user_no = m.find('participantCount').text
 			users = []
+			isListening = False
 			for u in m.find('attendees').iter('attendee'):
 				users.append(u.find('fullName').text)
+				if u.find('isListeningOnly').text == "true":
+					isListening = True
 			meetid = m.find('meetingID').text
 			meetid_int = m.find('internalMeetingID').text
-			mids[meetid] = {'bbb_meet_id': meetid_int, 'users': users, 'user_no': int(user_no) }
+			mids[meetid] = {'bbb_meet_id': meetid_int, 'users': users, 'user_no': int(user_no), "isListening": isListening }
 	return mids
 
 def check_streaming_rooms(meetingids):
 	streaming_rooms = {}
 	cur = conn_auth.cursor()
-	
+
 	for bbbid in meetingids.keys():
 		cur.execute("SELECT uid,attendee_pw,room_settings FROM rooms WHERE bbb_id = %s;", (bbbid,))
 		res = cur.fetchall()
@@ -191,11 +194,12 @@ def check_streaming_rooms(meetingids):
 			roompath = res[0][0]
 			attendeepw = res[0][1]
 			roomdata = json.loads(res[0][2])
-			if 'streaming' in roomdata:
-				if roomdata['streaming'] == True:
+			if 'streaming' in roomdata and 'streamingurl' in roomdata:
+				if roomdata['streaming'] == True and 'rtmp' in roomdata['streamingurl']:
 					meetingids[bbbid]['roompath'] = roompath
 					meetingids[bbbid]['attendeepw'] = attendeepw
 					meetingids[bbbid]['roomdata'] = dict(roomdata)
+					meetingids[bbbid]['streamingurl'] = roomdata['streamingurl']
 					streaming_rooms[bbbid] = meetingids[bbbid]
 	return streaming_rooms
 
@@ -217,7 +221,8 @@ def start_streaming(meetingids):
 			'BBB_START_MEETING': 'false',
 			'BBB_MEETING_ID': bbbid,
 			'FFMPEG_STREAM_THREADS': '0',
-			'BBB_STREAM_URL': BBB_RTMP_PATH + meetingids[bbbid]['roompath'],
+#			'BBB_STREAM_URL': BBB_RTMP_PATH + meetingids[bbbid]['roompath'],
+			'BBB_STREAM_URL': meetingids[bbbid]['streamingurl'],
 			'FFMPEG_STREAM_VIDEO_BITRATE': '4000',
 			'BBB_SECRET': BBB_SECRET,
 			'BBB_SHOW_CHAT': 'false',
@@ -225,7 +230,7 @@ def start_streaming(meetingids):
 			'BBB_CHAT_STREAM_URL': BBB_WEB_STREAM+meetingids[bbbid]['roompath']+'/',
 			'BBB_ATTENDEE_PASSWORD': meetingids[bbbid]['attendeepw']
 		}
-		
+
 		if not check_container_running(bbbid) and meetingids[bbbid]['user_no'] > 0 and not 'Streaming User' in meetingids[bbbid]['users']:
 			container = client.containers.run('aauzid/bigbluebutton-livestreaming', name='strm_'+bbbid, shm_size='2gb', environment=dockerenv, detach=True)
 			streamCount += 1
@@ -236,7 +241,7 @@ def terminate_orphaned(meetingids):
 	for container in containers:
 		if '/strm_' == container.attrs['Name'][:6]:
 			name = container.attrs['Name'][6:]
-			
+
 			if not name in meetingids:
 				container.kill()
 			else:
@@ -244,7 +249,7 @@ def terminate_orphaned(meetingids):
 					container.kill()
 					print('Stopping container /strm_' == container.attrs['Name'][:6])
 	client.containers.prune()
-		
+
 while True:
 	delayTimout = 10
 	mids = get_running_rooms()
