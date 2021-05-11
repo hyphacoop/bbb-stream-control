@@ -137,6 +137,10 @@ with open("config.json") as json_config_file:
 
 POSTGRESHOST = "localhost"
 POSTGRESPORT = 5433
+
+# must be 5 characters total
+STREAMID = 'str1_'
+
 if "postgresql" in config:
 	if "db" in config["postgresql"] and "user" in config["postgresql"] and "password" in config["postgresql"]:
 		POSTGRESDB = config["postgresql"]["db"]
@@ -237,7 +241,7 @@ def check_streaming_rooms(meetingids):
 
 def check_container_running(bbbid):
 	try:
-		container = client.containers.get('strm_'+bbbid)
+		container = client.containers.get(STREAMID+bbbid)
 	except docker.errors.NotFound:
 		return False
 	return True
@@ -264,14 +268,14 @@ def start_streaming(meetingids):
 		}
 
 		if not check_container_running(bbbid) and meetingids[bbbid]['user_no'] > 0 and not 'Streaming User' in meetingids[bbbid]['users']:
-			container = client.containers.run('aauzid/bigbluebutton-livestreaming', name='strm_'+bbbid, shm_size='2gb', environment=dockerenv, detach=True)
+			container = client.containers.run('aauzid/bigbluebutton-livestreaming', name=STREAMID+bbbid, shm_size='2gb', environment=dockerenv, detach=True)
 			streamCount += 1
-			print('Started container strm_'+bbbid+'\n')
+			print('Started container '+STREAMID+bbbid+'\n')
 	return streamCount
 def terminate_orphaned(meetingids):
 	containers = client.containers.list()
 	for container in containers:
-		if '/strm_' == container.attrs['Name'][:6]:
+		if STREAMID == container.attrs['Name'][:6]:
 			name = container.attrs['Name'][6:]
 
 			if not name in meetingids:
@@ -279,7 +283,7 @@ def terminate_orphaned(meetingids):
 			else:
 				if meetingids[name]['user_no'] == 1 and 'Streaming User' in meetingids[name]['users']:
 					container.kill()
-					print('Stopping container /strm_' == container.attrs['Name'][:6])
+					print('Stopping container /' + STREAMID == container.attrs['Name'][:6])
 	client.containers.prune()
 
 while True:
