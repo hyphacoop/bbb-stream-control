@@ -135,22 +135,34 @@ import psycopg2
 with open("config.json") as json_config_file:
 	config = json.load(json_config_file)
 
-POSTGRESHOST = "localhost"
-POSTGRESPORT = 5433
-if "postgresql" in config:
-	if "db" in config["postgresql"] and "user" in config["postgresql"] and "password" in config["postgresql"]:
-		POSTGRESDB = config["postgresql"]["db"]
-		POSTGRESUSER = config["postgresql"]["user"]
-		POSTGRESPASS = config["postgresql"]["password"]
+
+dbConfig = {}
+def readPostgresData(name,config):
+	global dbConfig
+	dbConfig[name]={}
+	dbConfig[name]["POSTGRESHOST"] = "localhost"
+	dbConfig[name]["POSTGRESPORT"] = 5433
+
+	if "db" in config and "user" in config and "password" in config:
+		dbConfig[name]["POSTGRESDB"] = config["db"]
+		dbConfig[name]["POSTGRESUSER"] = config["user"]
+		dbConfig[name]["POSTGRESPASS"] = config["password"]
 	else:
 		print('Missing postgresql config')
 		sys.exit(1)
-	if "port" in config["postgresql"]:
-		POSTGRESPORT = config["postgresql"]["port"]
-	if "host" in config["postgresql"]:
-		POSTGRESHOST = config["postgresql"]["host"]
+	if "port" in config:
+		dbConfig[name]["POSTGRESPORT"] = config["port"]
+	if "host" in config:
+		dbConfig[name]["POSTGRESHOST"] = config["host"]
 
-conn_auth = psycopg2.connect("dbname=" + POSTGRESDB + " user=" + POSTGRESUSER + " password=" + POSTGRESPASS + " host=" + POSTGRESHOST + " port=" + POSTGRESPORT)
+if "postgresql" in config:
+	# Single definition
+	if "db" in config["postgresql"]:
+		readPostgresData("Primary",config["postgresql"])
+	else:
+		for item in config["postgresql"]:
+			readPostgresData(item,config["postgresql"][item])
+
 
 DAEMON = False
 BBB_URL = ""
@@ -242,7 +254,7 @@ def check_container_running(bbbid):
 		return False
 	return True
 
-def start_streaming(meetingids):
+def start_streaming(meetingids,prefix):
 	streamCount=0
 	client.containers.prune()
 	for bbbid in meetingids.keys():
@@ -263,16 +275,16 @@ def start_streaming(meetingids):
 		}
 
 		if not check_container_running(bbbid) and meetingids[bbbid]['user_no'] > 0 and not 'Streaming User' in meetingids[bbbid]['users']:
-			container = client.containers.run('aauzid/bigbluebutton-livestreaming', name='strm_'+bbbid, shm_size='2gb', environment=dockerenv, detach=True)
+			container = client.containers.run('aauzid/bigbluebutton-livestreaming', name='strm_'+prefix+'_'+bbbid, shm_size='2gb', environment=dockerenv, detach=True)
 			streamCount += 1
-			print('Started container strm_'+bbbid+'\n')
+			print('Started container strm_' + prefix + '_'+bbbid+'\n')
 	return streamCount
-def terminate_orphaned(meetingids):
+def terminate_orphaned(meetingids,prefix):
 	containers = client.containers.list()
 	for container in containers:
-		if '/strm_' == container.attrs['Name'][:6]:
-			name = container.attrs['Name'][6:]
-
+		if '/strm_' == container.attrs['Name'][:6] and container.attrs['Name'].rfind('_' + prefix + '_'):
+			nameStart = container.attrs['Name'].rfind('_')+1
+			name = container.attrs['Name'][nameStart:]
 			if not name in meetingids:
 				container.kill()
 			else:
@@ -284,13 +296,19 @@ def terminate_orphaned(meetingids):
 while True:
 	delayTimout = 10
 	mids = get_running_rooms()
-	stream_mids  = check_streaming_rooms(mids)
-	retVal=start_streaming(stream_mids)
-	if retVal > 0:
-		# Delay next loop a little to allow container to start
-		delayTimout = 30
-	terminate_orphaned(stream_mids)
+
+	# Loop through insidents
+	for item in dbConfig:
+		conn_auth = psycopg2.connect("dbname=" + dbConfig[item]["POSTGRESDB"] + " user=" + dbConfig[item]["POSTGRESUSER"] + " password=" + dbConfig[item]["POSTGRESPASS"] + " host=" + dbConfig[item]["POSTGRESHOST"] + " port=" + dbConfig[item]["POSTGRESPORT"])
+		stream_mids  = check_streaming_rooms(mids)
+		retVal=start_streaming(stream_mids,item)
+		if retVal > 0:
+			# Delay next loop a little to allow container to start
+			delayTimout = 30
+		terminate_orphaned(stream_mids,item)
+		conn_auth.close()
+
 	if DAEMON:
-		time.sleep(delayTimout)
+			time.sleep(delayTimout)
 	else:
 	    break
