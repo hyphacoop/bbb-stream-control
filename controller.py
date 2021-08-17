@@ -282,7 +282,7 @@ def start_streaming(meetingids,prefix):
 def terminate_orphaned(meetingids,prefix):
 	containers = client.containers.list()
 	for container in containers:
-		if '/strm_' == container.attrs['Name'][:6] and container.attrs['Name'].rfind('_' + prefix + '_'):
+		if '/strm_' == container.attrs['Name'][:6] and container.attrs['Name'].rfind('_' + prefix + '_') > 0:
 			nameStart = container.attrs['Name'].rfind('_')+1
 			name = container.attrs['Name'][nameStart:]
 			if not name in meetingids:
